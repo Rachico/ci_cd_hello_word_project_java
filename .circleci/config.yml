@@ -1,0 +1,76 @@
+defaults: &defaults
+  docker:
+    - image: circleci/openjdk:13-buster
+  working_directory: ~/api
+
+version: 2.1
+
+orbs:
+  aws-cli: circleci/aws-cli@1.3.0
+
+jobs:
+
+  build:
+    <<: *defaults
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - gradle-{{ checksum "build.gradle" }}
+      - run:
+          name: build project
+          command: |
+            ./gradlew assemble
+      - run:
+          name: unit tests
+          command: ./gradlew test
+      - save_cache:
+          key: gradle-{{ checksum "build.gradle" }}
+          paths:
+            - ~/.gradle
+      - persist_to_workspace:
+          root: .
+          paths:
+            - '*'
+
+  publish:
+    <<: *defaults
+    executor: aws-cli/default
+    steps:
+      - attach_workspace:
+          at: ~/api
+      - restore_cache:
+          keys:
+            - gradle-{{ checksum "build.gradle" }}
+      - setup_remote_docker:
+          docker_layer_caching: false
+      - aws-cli/install
+      - aws-cli/setup:
+          aws-access-key-id: AWS_EKS_ACCESS_KEY
+          aws-secret-access-key: AWS_EKS_SECRET_KEY
+          aws-region: AWS_REGION
+      - run:
+          name: aws ecr login
+          command: aws ecr get-login-password | docker login --username AWS --password-stdin 268764888866.dkr.ecr.eu-west-1.amazonaws.com
+      - run:
+          name: docker publish
+          command: |
+            ./gradlew jib
+      - save_cache:
+          key: gradle-{{ checksum "build.gradle" }}
+          paths:
+            - ~/.gradle
+
+workflows:
+  workflow:
+    jobs:
+      - build:
+          context: global
+      - publish:
+          context: global
+          requires:
+            - build
+          filters:
+            branches:
+              only:
+                - master
